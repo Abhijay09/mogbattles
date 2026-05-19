@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MOG BATTLES</title>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,300;0,400;0,600;0,700;0,900;1,700&family=Syne+Mono&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- SCREENS -->
+<div id="screen-lobby" class="screen active">
+  <div class="lobby-content">
+    <div class="logo-mark"><span class="mog">MOG</span><span class="battles">Battles</span></div>
+    <div class="tagline">// face-to-face. score-to-score. no mercy.</div>
+    <div class="lobby-actions">
+      <button class="btn-primary" onclick="goToRoom('create')">⚔ START A BATTLE</button>
+      <button class="btn-secondary" onclick="goToRoom('join')">JOIN ROOM</button>
+    </div>
+    <div class="lobby-stats">
+      <div class="stat-item"><div class="stat-num" id="statBattles">—</div><div class="stat-lbl">Battles Today</div></div>
+      <div class="stat-item"><div class="stat-num" id="statOnline">—</div><div class="stat-lbl">Online Now</div></div>
+      <div class="stat-item"><div class="stat-num">∞</div><div class="stat-lbl">Free Forever</div></div>
+    </div>
+  </div>
+</div>
+
+<div id="screen-room" class="screen">
+  <div class="room-panel" id="roomPanel">
+    <button class="btn-back" onclick="showScreen('lobby')">← BACK</button>
+    <div class="panel-header" id="roomPanelTitle">CREATE ROOM</div>
+    <div class="panel-sub" id="roomPanelSub">Share the code with your opponent</div>
+    <div class="divider"></div>
+    <div id="createMode">
+      <div class="room-code-display">
+        <div class="room-code-val" id="generatedCode">—</div>
+        <button class="copy-btn" onclick="copyCode()">COPY</button>
+      </div>
+      <div class="waiting-indicator"><div class="pulse-dot"></div><span id="waitingText">GENERATING ROOM...</span></div>
+    </div>
+    <div id="joinMode" style="display:none; display:flex; flex-direction:column; gap:16px;">
+      <div class="field-group">
+        <div class="field-label">ROOM CODE</div>
+        <input class="field-input" id="joinCodeInput" maxlength="6" placeholder="ENTER CODE" autocomplete="off" oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter')joinRoom()">
+      </div>
+      <div class="field-group">
+        <div class="field-label">YOUR NICKNAME (optional)</div>
+        <input class="field-input" id="nicknameInput" maxlength="16" placeholder="ANONYMOUS">
+      </div>
+      <button class="btn-primary" onclick="joinRoom()">JOIN BATTLE</button>
+    </div>
+  </div>
+</div>
+
+<div id="screen-battle" class="screen">
+  <div class="battle-topbar">
+    <div class="battle-logo">MOG⚔BATTLES</div>
+    <div class="room-pill"><span class="room-pill-label">ROOM</span><span class="room-pill-code" id="battleRoomCode">——</span></div>
+    <div class="conn-status"><div class="conn-dot" id="connDot"></div><span id="connLabel">CONNECTING</span></div>
+  </div>
+  <div class="battle-arena">
+    <div class="fighter-panel you">
+      <div class="fighter-video-wrap" id="youVideoWrap">
+        <div class="cam-off-placeholder" id="youCamOff"><div class="cam-off-icon">◎</div><div class="cam-off-text">Starting camera...</div></div>
+        <video id="youVideo" class="fighter-video you-vid" autoplay muted playsinline></video>
+        <canvas id="youCanvas" class="fighter-canvas you-canvas"></canvas>
+        <div class="fighter-label"><div class="fighter-name" id="youLabel">YOU</div></div>
+        <div class="cb tl"></div><div class="cb br"></div>
+        <div class="scan-overlay" id="youScanOverlay"><div class="scan-sweep"></div><div class="scan-label">ANALYZING</div><div class="scan-progress-bar"><div class="scan-progress-fill" id="youProgressFill"></div></div></div>
+        <div class="live-score-badge" id="youScoreBadge"><div class="score-big" id="youScoreNum">—</div><div class="score-sub">YOUR SCORE</div></div>
+        <div class="no-face-warn" id="youNoFace">NO FACE DETECTED</div>
+      </div>
+      <div class="fighter-footer"><div class="metric-chips" id="youChips">
+          <div class="m-chip" data-key="symmetry">SYM —</div><div class="m-chip" data-key="jawline">JAW —</div><div class="m-chip" data-key="eyes">EYES —</div><div class="m-chip" data-key="brows">BROWS —</div><div class="m-chip" data-key="structure">STRUCT —</div><div class="m-chip" data-key="skin">SKIN —</div><div class="m-chip" data-key="proportion">PROP —</div>
+      </div></div>
+    </div>
+    <div class="center-col">
+      <div class="winner-announce" id="winnerAnnounce">WAITING</div>
+      <div class="vs-giant">VS</div>
+      <div class="center-timer" id="centerTimer"></div>
+      <button class="center-btn" id="scanBtn" onclick="initiateBattle()" disabled>SCAN</button>
+      <button class="rematch-btn" id="rematchBtn" onclick="requestRematch()">REMATCH</button>
+      <div class="center-hint" id="centerHint">Waiting for opponent...</div>
+    </div>
+    <div class="fighter-panel opponent">
+      <div class="fighter-video-wrap">
+        <div class="cam-off-placeholder" id="oppCamOff"><div class="cam-off-icon">◎</div><div class="cam-off-text">Waiting for opponent...</div></div>
+        <video id="oppVideo" class="fighter-video opp-vid" autoplay playsinline></video>
+        <canvas id="oppCanvas" class="fighter-canvas opp-canvas"></canvas>
+        <div class="fighter-label"><div class="fighter-name opponent-name" id="oppLabel">OPPONENT</div></div>
+        <div class="cb tl"></div><div class="cb br"></div>
+        <div class="scan-overlay opponent-scan" id="oppScanOverlay"><div class="scan-sweep"></div><div class="scan-label">ANALYZING</div><div class="scan-progress-bar"><div class="scan-progress-fill" id="oppProgressFill"></div></div></div>
+        <div class="live-score-badge" id="oppScoreBadge"><div class="score-big opponent-score" id="oppScoreNum">—</div><div class="score-sub">OPP SCORE</div></div>
+      </div>
+      <div class="fighter-footer"><div class="metric-chips" id="oppChips">
+          <div class="m-chip opp" data-key="symmetry">SYM —</div><div class="m-chip opp" data-key="jawline">JAW —</div><div class="m-chip opp" data-key="eyes">EYES —</div><div class="m-chip opp" data-key="brows">BROWS —</div><div class="m-chip opp" data-key="structure">STRUCT —</div><div class="m-chip opp" data-key="skin">SKIN —</div><div class="m-chip opp" data-key="proportion">PROP —</div>
+      </div></div>
+    </div>
+  </div>
+</div>
+
+<div id="screen-result" class="screen">
+  <div class="result-container">
+    <div class="result-side" id="resultYouSide">
+      <div class="result-player-tag">YOUR SCORE</div><div class="result-score-huge" id="resYouScore">—</div><div class="result-rating" id="resYouRating">—</div><div class="result-metrics" id="resYouMetrics"></div><div class="result-verdict" id="resYouVerdict"></div>
+    </div>
+    <div class="result-center">
+      <div class="crown-icon" id="resCrown">🏆</div><div class="result-winner-label" id="resWinnerLabel">—</div><div style="height:1px;width:100%;background:var(--border);"></div><div class="result-diff" id="resDiff">+0</div><div class="result-diff-label">POINT DIFF</div><div style="height:1px;width:100%;background:var(--border);"></div>
+      <div class="result-actions"><button class="center-btn" onclick="requestRematch()" style="width:100%">REMATCH</button><button class="btn-secondary" onclick="showScreen('lobby')" style="width:100%;font-size:0.8rem;padding:10px 0;">LEAVE</button></div>
+    </div>
+    <div class="result-side" id="resultOppSide">
+      <div class="result-player-tag">OPPONENT</div><div class="result-score-huge loser" id="resOppScore">—</div><div class="result-rating loser" id="resOppRating">—</div><div class="result-metrics" id="resOppMetrics"></div><div class="result-verdict" id="resOppVerdict"></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+<script src="main.js"></script>
+</body>
+</html>
