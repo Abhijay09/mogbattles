@@ -30,6 +30,17 @@ let oppResult = null;
 let battleInProgress = false;
 let countdownTimer = null;
  
+let scanState = {
+  active: false,
+  stage: 0, // 0: Front, 1: Sideways, 2: Vertical
+  progress: 0,
+  leftSeen: false,
+  rightSeen: false,
+  upSeen: false,
+  downSeen: false,
+  stableFrames: 0
+};
+
 // For opponent canvas draw (received via data channel)
 let dataChannel = null;
 let oppCanvasLandmarks = null;
@@ -40,6 +51,26 @@ let oppCanvasLandmarks = null;
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
+}
+
+function toggleMesh() {
+  const canvas = document.getElementById('youCanvas');
+  const isHidden = canvas.style.display === 'none';
+  canvas.style.display = isHidden ? 'block' : 'none';
+  if (event && event.target) {
+    event.target.classList.toggle('active', isHidden);
+  }
+}
+
+function toggleMic() {
+  if (!localStream) return;
+  const audioTrack = localStream.getAudioTracks()[0];
+  if (audioTrack) {
+    audioTrack.enabled = !audioTrack.enabled;
+    const btn = document.getElementById('micBtn');
+    btn.textContent = audioTrack.enabled ? 'MIC ON' : 'MIC OFF';
+    btn.classList.toggle('active', audioTrack.enabled);
+  }
 }
  
 function leaveRoom() {
@@ -62,34 +93,34 @@ function leaveRoom() {
 }
  
 // ============================================================
-//  LOBBY STATS (fake live counters for now)
-// ============================================================
-function animateLobbyStats() {
-  let battles = 1247 + Math.floor(Math.random() * 100);
-  let online = 34 + Math.floor(Math.random() * 20);
-  document.getElementById('statBattles').textContent = battles.toLocaleString();
-  document.getElementById('statOnline').textContent = online;
-}
-animateLobbyStats();
- 
-// ============================================================
 //  ROOM FLOW
 // ============================================================
 function goToRoom(mode) {
   showScreen('room');
   if (mode === 'create') {
-    document.getElementById('createMode').style.display = 'block';
+    document.getElementById('hostInitMode').style.display = 'flex';
+    document.getElementById('hostWaitingMode').style.display = 'none';
     document.getElementById('joinMode').style.display = 'none';
     document.getElementById('roomPanelTitle').textContent = 'CREATE ROOM';
-    document.getElementById('roomPanelSub').textContent = 'Share the code with your opponent';
-    createRoom();
+    document.getElementById('roomPanelSub').textContent = 'Pick a nickname to start';
+    document.getElementById('hostNicknameInput').focus();
   } else {
-    document.getElementById('createMode').style.display = 'none';
+    document.getElementById('hostInitMode').style.display = 'none';
+    document.getElementById('hostWaitingMode').style.display = 'none';
     document.getElementById('joinMode').style.display = 'flex';
     document.getElementById('roomPanelTitle').textContent = 'JOIN ROOM';
     document.getElementById('roomPanelSub').textContent = 'Enter the code your friend sent you';
     document.getElementById('joinCodeInput').focus();
   }
+}
+
+function initHostRoom() {
+  const nick = document.getElementById('hostNicknameInput').value.trim() || 'HOST';
+  myNickname = nick;
+  document.getElementById('hostInitMode').style.display = 'none';
+  document.getElementById('hostWaitingMode').style.display = 'flex';
+  document.getElementById('roomPanelSub').textContent = 'Share the code with your opponent';
+  createRoom();
 }
  
 function generateCode() {
@@ -273,7 +304,7 @@ async function enterBattle() {
       if (!localStream) {
         localStream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
-          audio: false
+          audio: true
         });
       }
       const youVideo = document.getElementById('youVideo');
@@ -347,34 +378,130 @@ function onMyFaceMeshResults(results) {
   }
  
   drawWireframe(canvas, lm, w, h, '#00e5ff');
+
+  if (scanState.active && lm) {
+    updateScanProgress(lm);
+  }
 }
  
+function updateScanProgress(lm) {
+  const d = (a, b) => Math.sqrt((lm[a].x - lm[b].x) ** 2 + (lm[a].y - lm[b].y) ** 2);
+  
+  // Simplified Yaw (Sideways) - Using nose tip relative to eye corners
+  // landmarks: 1:nose, 33:L-eye-outer, 263:R-eye-outer
+  const yaw = (lm[1].x - lm[33].x) / (lm[263].x - lm[33].x);
+  
+  // Simplified Pitch (Vertical) - Using nose tip relative to forehead and chin
+  // landmarks: 1:nose, 10:forehead, 152:chin
+  const pitch = (lm[1].y - lm[10].y) / (lm[152].y - lm[10].y);
+
+  const fill = document.getElementById('youProgressFill');
+  const instr = document.getElementById('scanInstruction');
+  const stageLbl = document.getElementById('scanStageLabel');
+
+  if (scanState.stage === 0) {
+    stageLbl.textContent = 'STAGE 1: FRONTAL';
+    instr.textContent = 'LOOK DIRECTLY AT CAMERA';
+    // Center is approx yaw 0.5, pitch 0.5
+    if (Math.abs(yaw - 0.5) < 0.1 && Math.abs(pitch - 0.5) < 0.1) {
+      scanState.stableFrames++;
+      if (scanState.stableFrames > 30) {
+        scanState.stage = 1;
+        scanState.progress = 33;
+        scanState.stableFrames = 0;
+      }
+    } else {
+      scanState.stableFrames = 0;
+    }
+  } else if (scanState.stage === 1) {
+    stageLbl.textContent = 'STAGE 2: SIDEWAYS';
+    if (!scanState.leftSeen && !scanState.rightSeen) instr.textContent = 'TURN HEAD LEFT AND RIGHT';
+    else if (!scanState.leftSeen) instr.textContent = 'NOW TURN LEFT';
+    else if (!scanState.rightSeen) instr.textContent = 'NOW TURN RIGHT';
+
+    if (yaw < 0.35) scanState.leftSeen = true;
+    if (yaw > 0.65) scanState.rightSeen = true;
+
+    if (scanState.leftSeen && scanState.rightSeen) {
+      triggerRecalibration();
+      scanState.stage = 2;
+      scanState.progress = 66;
+    }
+  } else if (scanState.stage === 2) {
+    stageLbl.textContent = 'STAGE 3: VERTICAL';
+    if (!scanState.upSeen && !scanState.downSeen) instr.textContent = 'LOOK UP AND DOWN';
+    else if (!scanState.upSeen) instr.textContent = 'NOW LOOK UP';
+    else if (!scanState.downSeen) instr.textContent = 'NOW LOOK DOWN';
+
+    if (pitch < 0.4) scanState.upSeen = true;
+    if (pitch > 0.6) scanState.downSeen = true;
+
+    if (scanState.upSeen && scanState.downSeen) {
+      triggerRecalibration();
+      scanState.stage = 3;
+      scanState.progress = 100;
+      // Small delay before finishing to let the user see 100%
+      setTimeout(() => { if (scanState.active) finishMyScan(); }, 500);
+    }
+  }
+
+  fill.style.width = scanState.progress + '%';
+}
+
+function triggerRecalibration() {
+  const overlay = document.getElementById('youScanOverlay');
+  overlay.style.backgroundColor = 'rgba(0, 229, 255, 0.2)';
+  setTimeout(() => {
+    overlay.style.backgroundColor = 'rgba(8, 11, 15, 0.6)';
+  }, 100);
+  showToast('ANGLE CALIBRATED');
+}
+
+function finishMyScan() {
+  scanState.active = false;
+  const overlay = document.getElementById('youScanOverlay');
+  const fill = document.getElementById('youProgressFill');
+  overlay.classList.remove('active');
+  fill.style.width = '0%';
+
+  myResult = analyzeFace(myLastLandmarks);
+  if (!myResult) myResult = { overall: 5.0, metrics: { symmetry:5,jawline:5,eyes:5,brows:5,structure:5,skin:5,proportion:5 } };
+  
+  // Real multi-angle accuracy bonus
+  myResult.overall = Math.min(10, myResult.overall + 0.5); 
+  
+  displayScore('you', myResult);
+  sendAppMsg({ type: 'my-result', result: myResult });
+  checkBothDone();
+}
+
 // ============================================================
 //  WIREFRAME DRAW (Simplified Aesthetic)
 // ============================================================
 const TESSELLATION = [
-  // Jawline
+  // Jawline (Detailed)
   [10, 338], [338, 297], [297, 332], [332, 284], [284, 251], [251, 389], [389, 356], [356, 454], [454, 323], [323, 361], [361, 288], [288, 397], [397, 365], [365, 379], [379, 378], [378, 400], [400, 377], [377, 152], [152, 148], [148, 176], [176, 149], [149, 150], [150, 136], [136, 172], [172, 58], [58, 132], [132, 93], [93, 234], [234, 127], [127, 162], [162, 21], [21, 54], [54, 103], [103, 67], [67, 109], [109, 10],
   // Eyes (Left)
   [33, 7], [7, 163], [163, 144], [144, 145], [145, 153], [153, 154], [154, 155], [155, 133], [133, 173], [173, 157], [157, 158], [158, 159], [159, 160], [160, 161], [161, 246], [246, 33],
   // Eyes (Right)
   [362, 382], [382, 381], [381, 380], [380, 374], [374, 373], [373, 390], [390, 249], [249, 263], [263, 466], [466, 388], [388, 387], [387, 386], [386, 385], [385, 384], [384, 398], [398, 362],
   // Eyebrows (Left)
-  [46, 53], [53, 52], [52, 65], [65, 55], [55, 70], [70, 63], [63, 105], [105, 66], [66, 107],
+  [46, 53], [53, 52], [52, 65], [65, 55], [55, 70], [70, 63], [63, 105], [105, 66], [66, 107], [107, 55],
   // Eyebrows (Right)
-  [276, 283], [283, 282], [282, 295], [295, 285], [285, 300], [300, 293], [293, 334], [334, 296], [296, 336],
+  [276, 283], [283, 282], [282, 295], [295, 285], [285, 300], [300, 293], [293, 334], [334, 296], [296, 336], [336, 285],
+  // Lips (Outer)
+  [61, 146], [146, 91], [91, 181], [181, 84], [84, 17], [17, 314], [314, 405], [405, 321], [321, 375], [375, 291], [291, 308], [308, 324], [324, 318], [318, 402], [402, 317], [317, 14], [14, 87], [87, 178], [178, 95], [95, 78], [78, 61],
   // Nose
-  [168, 6], [6, 1], [1, 2], [2, 164], [164, 0]
+  [168, 6], [6, 1], [1, 2], [2, 164], [164, 0], [0, 168], [168, 197], [197, 195], [195, 5]
 ];
  
-// Important facial positions only
+// Critical points for aesthetic marker
 const LANDMARK_POINTS = [
-  1, 4, // Nose
-  33, 133, 362, 263, // Eyes corners
-  70, 107, 300, 336, // Eyebrows outer
+  1, 4, 10, 152, // Center axis
+  33, 133, 362, 263, // Eye corners
+  61, 291, // Mouth corners
   234, 454, // Cheekbones
-  152, 10, // Chin/Forehead
-  61, 291 // Mouth corners
+  70, 300 // Eyebrow peaks
 ];
  
 function drawWireframe(canvas, landmarks, w, h, color) {
@@ -382,36 +509,43 @@ function drawWireframe(canvas, landmarks, w, h, color) {
   ctx.clearRect(0, 0, w, h);
   if (!landmarks) return;
  
-  ctx.strokeStyle = color + '44';
-  ctx.lineWidth = 1;
-  ctx.lineCap = 'round';
+  // Sharper, higher contrast lines
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.0;
+  ctx.lineCap = 'butt'; // Straighter, sharper ends
+  ctx.globalAlpha = 0.8;
  
   for (const [a, b] of TESSELLATION) {
     if (!landmarks[a] || !landmarks[b]) continue;
+    
+    // Fix mirroring: If video is scaleX(-1), landmarks need to be flipped horizontally to match
+    const ax = (1 - landmarks[a].x) * w;
+    const ay = landmarks[a].y * h;
+    const bx = (1 - landmarks[b].x) * w;
+    const by = landmarks[b].y * h;
+
     ctx.beginPath();
-    ctx.moveTo(landmarks[a].x * w, landmarks[a].y * h);
-    ctx.lineTo(landmarks[b].x * w, landmarks[b].y * h);
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
     ctx.stroke();
   }
+  ctx.globalAlpha = 1.0;
  
-  // Points
+  // Smaller, cleaner point markers
   for (const idx of LANDMARK_POINTS) {
     if (!landmarks[idx]) continue;
-    const x = landmarks[idx].x * w;
+    const x = (1 - landmarks[idx].x) * w;
     const y = landmarks[idx].y * h;
  
     ctx.fillStyle = color;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(x, y, 1.2, 0, Math.PI * 2); 
+    ctx.fill();
+ 
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 0.5;
     ctx.beginPath();
     ctx.arc(x, y, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
- 
-    // Small ring around point
-    ctx.strokeStyle = color + '88';
-    ctx.beginPath();
-    ctx.arc(x, y, 6, 0, Math.PI * 2);
     ctx.stroke();
   }
 }
@@ -480,9 +614,19 @@ function analyzeFace(lm) {
  
   const metrics = { symmetry, jawline, eyes, brows, structure, skin, proportion };
   const weights = { symmetry: 0.22, jawline: 0.18, eyes: 0.18, brows: 0.12, structure: 0.16, skin: 0.08, proportion: 0.06 };
-  let overall = 0;
-  for (const k in weights) overall += metrics[k] * weights[k];
-  return { metrics, overall: Math.round(overall * 10) / 10 };
+  let rawOverall = 0;
+  for (const k in weights) rawOverall += metrics[k] * weights[k];
+
+  // MOG MAGNIFICATION: Increases disparity in the "average" range.
+  // We use a steep linear mapping centered around the average (4.6 raw)
+  // Input 4.1 -> Output ~5.0
+  // Input 5.1 -> Output ~8.2
+  let magnified = (rawOverall - 4.6) * 3.2 + 6.5;
+  
+  // Final clamping to the 1.0 - 10.0 scale
+  const finalOverall = Math.max(1, Math.min(10, magnified));
+
+  return { metrics, overall: Math.round(finalOverall * 10) / 10 };
 }
  
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
@@ -526,35 +670,44 @@ async function initiateBattle() {
   setTimeout(() => runScan('opp'), 300);
 }
  
-function runScan(who) {
+async function runScan(who) {
   const overlay   = document.getElementById(who === 'you' ? 'youScanOverlay' : 'oppScanOverlay');
   const fill      = document.getElementById(who === 'you' ? 'youProgressFill' : 'oppProgressFill');
  
   overlay.classList.add('active');
-  fill.style.width = '0%';
-  setTimeout(() => { fill.style.width = '100%'; }, 50);
- 
-  setTimeout(() => {
+  
+  if (who === 'opp') {
+    fill.style.transition = 'width 4s linear';
     fill.style.width = '0%';
- 
-    if (who === 'you') {
-      overlay.classList.remove('active');
-      myResult = analyzeFace(myLastLandmarks);
-      if (!myResult) myResult = { overall: 5.0, metrics: { symmetry:5,jawline:5,eyes:5,brows:5,structure:5,skin:5,proportion:5 } };
-      displayScore('you', myResult);
-      sendAppMsg({ type: 'my-result', result: myResult });
-    } else {
-      // For opponent, we only remove overlay and display if we have the result
+    setTimeout(() => { fill.style.width = '100%'; }, 50);
+    setTimeout(() => {
       if (oppResult) {
         overlay.classList.remove('active');
         displayScore('opp', oppResult);
       } else {
         overlay.querySelector('.scan-label').textContent = 'WAITING...';
       }
-    }
- 
-    checkBothDone();
-  }, 2800);
+      checkBothDone();
+    }, 4500);
+    return;
+  }
+
+  // Reset and activate interactive scan for 'YOU'
+  scanState = {
+    active: true,
+    stage: 0,
+    progress: 0,
+    leftSeen: false,
+    rightSeen: false,
+    upSeen: false,
+    downSeen: false,
+    stableFrames: 0
+  };
+  
+  fill.style.transition = 'width 0.5s ease-out';
+  fill.style.width = '0%';
+  document.getElementById('scanStageLabel').textContent = 'INITIALIZING...';
+  document.getElementById('scanInstruction').textContent = 'CENTER YOUR FACE';
 }
  
 function generateSimOpponentResult() {
@@ -673,7 +826,6 @@ function renderResultMetrics(containerId, metrics, who) {
     delay += 60;
   }
 }
- 
 function handleAppMessage(msg) {
   if (!msg) return;
   switch(msg.type) {

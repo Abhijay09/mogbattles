@@ -19,8 +19,6 @@
       <button class="btn-secondary" onclick="goToRoom('join')">JOIN ROOM</button>
     </div>
     <div class="lobby-stats">
-      <div class="stat-item"><div class="stat-num" id="statBattles">—</div><div class="stat-lbl">Battles Today</div></div>
-      <div class="stat-item"><div class="stat-num" id="statOnline">—</div><div class="stat-lbl">Online Now</div></div>
       <div class="stat-item"><div class="stat-num">∞</div><div class="stat-lbl">Free Forever</div></div>
     </div>
   </div>
@@ -32,7 +30,14 @@
     <div class="panel-header" id="roomPanelTitle">CREATE ROOM</div>
     <div class="panel-sub" id="roomPanelSub">Share the code with your opponent</div>
     <div class="divider"></div>
-    <div id="createMode">
+    <div id="hostInitMode" style="display:none; flex-direction:column; gap:16px;">
+      <div class="field-group">
+        <div class="field-label">YOUR NICKNAME (optional)</div>
+        <input class="field-input" id="hostNicknameInput" maxlength="16" placeholder="HOST" onkeydown="if(event.key==='Enter')initHostRoom()">
+      </div>
+      <button class="btn-primary" onclick="initHostRoom()">GENERATE ROOM</button>
+    </div>
+    <div id="hostWaitingMode" style="display:none; flex-direction:column; gap:24px;">
       <div class="room-code-display">
         <div class="room-code-val" id="generatedCode">—</div>
         <button class="copy-btn" onclick="copyCode()">COPY</button>
@@ -67,10 +72,18 @@
         <canvas id="youCanvas" class="fighter-canvas you-canvas"></canvas>
         <div class="fighter-label">
           <div class="fighter-name" id="youLabel">YOU</div>
-          <button class="toggle-mesh-btn" onclick="toggleMesh()">MESH</button>
+          <div class="fighter-controls">
+            <button class="toggle-btn" id="micBtn" onclick="toggleMic()">MIC ON</button>
+            <button class="toggle-btn" onclick="toggleMesh()">MESH</button>
+          </div>
         </div>
         <div class="cb tl"></div><div class="cb br"></div>
-        <div class="scan-overlay" id="youScanOverlay"><div class="scan-sweep"></div><div class="scan-label" id="scanStageLabel">ANALYZING</div><div class="scan-progress-bar"><div class="scan-progress-fill" id="youProgressFill"></div></div></div>
+        <div class="scan-overlay" id="youScanOverlay">
+          <div class="scan-sweep"></div>
+          <div class="scan-label" id="scanStageLabel">ANALYZING</div>
+          <div class="scan-instruction" id="scanInstruction">CENTER YOUR FACE</div>
+          <div class="scan-progress-bar"><div class="scan-progress-fill" id="youProgressFill"></div></div>
+        </div>
         <div class="live-score-badge" id="youScoreBadge"><div class="score-big" id="youScoreNum">—</div><div class="score-sub">YOUR SCORE</div></div>
         <div class="no-face-warn" id="youNoFace">NO FACE DETECTED</div>
       </div>
@@ -81,8 +94,6 @@
     <div class="center-col">
       <div class="winner-announce" id="winnerAnnounce">WAITING</div>
       <div class="vs-giant">VS</div>
-      <div id="chatBox" class="chat-box"></div>
-      <input type="text" id="chatInput" class="chat-input" placeholder="Chat..." onkeydown="if(event.key==='Enter')sendChat()">
       <button class="center-btn" id="scanBtn" onclick="initiateBattle()" disabled>SCAN</button>
       <button class="rematch-btn" id="rematchBtn" onclick="requestRematch()">REMATCH</button>
       <div class="center-hint" id="centerHint">Waiting for opponent...</div>
