@@ -52,7 +52,7 @@ let scanState = {
 };
 
 let dataChannel = null;
-let iceCandidateQueue = []; // Added declaration
+let iceCandidateQueue = []; // DECLARED candidate queue to resolve crash on cellular data
 
 // ============================================================
 //  SCREEN ROUTER
@@ -101,7 +101,7 @@ function leaveRoom() {
   oppResult = null;
   myLastLandmarks = null;
   faceDetectedFrames = 0;
-  iceCandidateQueue = []; // Added queue reset
+  iceCandidateQueue = []; // Reset candidate queue on exit
 
   // Reset video elements
   const youVideo = document.getElementById('youVideo');
@@ -213,10 +213,10 @@ async function handleSignal(msg) {
       if (!pc) initPeerConnection();
       await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
       
-      // Process any candidates that arrived before the offer
+      // Process any candidates that arrived before the remote description was set
       while (iceCandidateQueue.length > 0) {
         const cand = iceCandidateQueue.shift();
-        try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch (e) { }
+        try { await pc.addIceCandidate(cand); } catch (e) { }
       }
 
       const answer = await pc.createAnswer();
@@ -227,10 +227,10 @@ async function handleSignal(msg) {
     case 'answer':
       if (pc) {
         await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-        // Process any candidates that arrived before the answer
+        // Process any candidates that arrived before the remote description was set
         while (iceCandidateQueue.length > 0) {
           const cand = iceCandidateQueue.shift();
-          try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch (e) { }
+          try { await pc.addIceCandidate(cand); } catch (e) { }
         }
       }
       break;
@@ -238,7 +238,7 @@ async function handleSignal(msg) {
     case 'ice':
       if (msg.candidate) {
         if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-          try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch (e) { }
+          try { await pc.addIceCandidate(msg.candidate); } catch (e) { }
         } else {
           iceCandidateQueue.push(msg.candidate);
         }
@@ -258,22 +258,25 @@ async function handleSignal(msg) {
       break;
   }
 }
+
 // ============================================================
-//  WEBRTC CONFIGURATION (STUN & TURN)
+//  WEBRTC STUN & TURN CONFIGURATION
 // ============================================================
 const ICE_SERVERS = {
   iceServers: [
-    // Standard STUN servers (for direct connections)
+    // Public STUN Servers
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
     
-    // Free Public TURN servers (for cross-network relay)
+    // Expanded TURN Server array containing standard, secure WebRTC ports (3478 / 5349)
     {
       urls: [
         'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:3478',
         'turn:openrelay.metered.ca:443',
-        'turns:openrelay.metered.ca:443'
+        'turns:openrelay.metered.ca:443',
+        'turns:openrelay.metered.ca:5349'
       ],
       username: 'openrelay',
       credential: 'openrelay'
