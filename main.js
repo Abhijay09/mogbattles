@@ -211,18 +211,36 @@ async function handleSignal(msg) {
       if (localStreamPromise) await localStreamPromise;
       if (!pc) initPeerConnection();
       await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      
+      // Process any candidates that arrived before the offer
+      while (iceCandidateQueue.length > 0) {
+        const cand = iceCandidateQueue.shift();
+        try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch (e) { }
+      }
+
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       wsSend({ type: 'answer', room: roomCode, sdp: pc.localDescription });
       break;
 
     case 'answer':
-      if (pc) await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        // Process any candidates that arrived before the answer
+        while (iceCandidateQueue.length > 0) {
+          const cand = iceCandidateQueue.shift();
+          try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch (e) { }
+        }
+      }
       break;
 
     case 'ice':
-      if (pc && msg.candidate) {
-        try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch (e) { }
+      if (msg.candidate) {
+        if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+          try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch (e) { }
+        } else {
+          iceCandidateQueue.push(msg.candidate);
+        }
       }
       break;
 
