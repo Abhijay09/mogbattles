@@ -10,7 +10,7 @@ const SIGNALING_SERVER = (
   location.hostname.startsWith('10.')
 )
   ? `ws://${location.hostname || '127.0.0.1'}:8081`
-  : 'wss://mogbattles.onrender.com';
+  : 'wss://mogbattles-server.onrender.com';
 
 console.log('SIGNALING_SERVER:', SIGNALING_SERVER);
 
