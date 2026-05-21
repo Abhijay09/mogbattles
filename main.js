@@ -1,7 +1,11 @@
 // ============================================================
 //  CONFIG — change SIGNALING_SERVER to your deployed server URL
 // ============================================================
-const SIGNALING_SERVER = 'wss://mog-battles-server.onrender.com'; // ← update after deploying
+const SIGNALING_SERVER = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '' || location.protocol === 'file:' || location.hostname.startsWith('192.168.') || location.hostname.startsWith('10.')) 
+  ? `ws://${location.hostname || '127.0.0.1'}:8081` 
+  : 'wss://mog-battles-server.onrender.com';
+
+console.log('SIGNALING_SERVER:', SIGNALING_SERVER);
  
 // ============================================================
 //  STATE
@@ -9,6 +13,7 @@ const SIGNALING_SERVER = 'wss://mog-battles-server.onrender.com'; // ← update 
 let ws = null;
 let pc = null;          // RTCPeerConnection
 let localStream = null;
+let localStreamPromise = null;
 let roomCode = '';
 let isHost = false;
 let myNickname = 'YOU';
@@ -35,6 +40,25 @@ let oppCanvasLandmarks = null;
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
+}
+ 
+function leaveRoom() {
+  if (ws) { ws.close(); ws = null; }
+  if (pc) { pc.close(); pc = null; }
+  if (localStream) {
+    localStream.getTracks().forEach(t => t.stop());
+    localStream = null;
+  }
+  if (myRafId) {
+    cancelAnimationFrame(myRafId);
+    myRafId = null;
+  }
+  localStreamPromise = null;
+  opponentConnected = false;
+  battleInProgress = false;
+  myResult = null;
+  oppResult = null;
+  showScreen('lobby');
 }
  
 // ============================================================
@@ -126,16 +150,17 @@ async function handleSignal(msg) {
       oppNickname = msg.nick || 'OPPONENT';
       showToast(`${oppNickname} joined! Starting battle...`);
       document.getElementById('waitingText').textContent = 'OPPONENT FOUND! SETTING UP...';
-      setTimeout(() => enterBattle(), 800);
+      enterBattle(); 
       break;
  
     case 'joined':
       oppNickname = msg.hostNick || 'HOST';
       showToast(`Joined ${roomCode}! Loading battle...`);
-      setTimeout(() => enterBattle(), 800);
+      enterBattle();
       break;
  
     case 'offer':
+      if (localStreamPromise) await localStreamPromise;
       if (!pc) initPeerConnection();
       await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
       const answer = await pc.createAnswer();
@@ -154,10 +179,13 @@ async function handleSignal(msg) {
       break;
  
     case 'data':
-      // App messages tunneled through WS as fallback
       handleAppMessage(msg.payload);
       break;
  
+    case 'opponent-disconnected':
+      handleAppMessage(msg);
+      break;
+
     case 'error':
       showToast(msg.message || 'Error');
       break;
@@ -170,23 +198,20 @@ async function handleSignal(msg) {
 const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    // Free TURN fallback (replace with your own for production)
-    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'stun:stun1.l.google.com:19302' }
   ]
 };
  
 function initPeerConnection() {
+  if (pc) return;
   pc = new RTCPeerConnection(ICE_SERVERS);
  
-  // Add local tracks
   if (localStream) {
     localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
   }
  
-  // Receive remote stream
   pc.ontrack = (e) => {
+    console.log('Received remote track');
     const oppVideo = document.getElementById('oppVideo');
     oppVideo.srcObject = e.streams[0];
     oppVideo.style.display = 'block';
@@ -201,14 +226,11 @@ function initPeerConnection() {
   pc.onconnectionstatechange = () => {
     console.log('PC state:', pc.connectionState);
     if (pc.connectionState === 'connected') setConnected();
-    if (pc.connectionState === 'failed') showToast('Connection failed — trying reconnect');
   };
  
-  // Data channel for app messages (score sharing)
   if (isHost) {
     dataChannel = pc.createDataChannel('mog', { ordered: true });
     dataChannel.onmessage = (e) => handleAppMessage(JSON.parse(e.data));
-    dataChannel.onopen = () => console.log('Data channel open');
   } else {
     pc.ondatachannel = (e) => {
       dataChannel = e.channel;
@@ -218,11 +240,9 @@ function initPeerConnection() {
 }
  
 function sendAppMsg(payload) {
-  const str = JSON.stringify(payload);
   if (dataChannel && dataChannel.readyState === 'open') {
-    dataChannel.send(str);
+    dataChannel.send(JSON.stringify(payload));
   } else {
-    // WS fallback
     wsSend({ type: 'data', room: roomCode, payload });
   }
 }
@@ -242,55 +262,54 @@ function setConnected() {
 //  ENTER BATTLE
 // ============================================================
 async function enterBattle() {
-  showScreen('battle');
-  document.getElementById('battleRoomCode').textContent = roomCode;
-  document.getElementById('youLabel').textContent = myNickname;
-  document.getElementById('connDot').className = 'conn-dot waiting';
-  document.getElementById('connLabel').textContent = 'CONNECTING...';
+  if (localStreamPromise) return localStreamPromise;
  
-  // Start camera
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-      audio: false
-    });
-    const youVideo = document.getElementById('youVideo');
-    youVideo.srcObject = localStream;
-    youVideo.style.display = 'block';
-    document.getElementById('youCamOff').style.display = 'none';
-  } catch(e) {
-    showToast('Camera access denied!');
-    return;
-  }
+  localStreamPromise = (async () => {
+    showScreen('battle');
+    document.getElementById('battleRoomCode').textContent = roomCode;
+    document.getElementById('youLabel').textContent = myNickname;
  
-  // Setup face mesh
-  myFaceMesh = new FaceMesh({
-    locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
-  });
-  myFaceMesh.setOptions({
-    maxNumFaces: 1,
-    refineLandmarks: true,
-    minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5
-  });
-  myFaceMesh.onResults(onMyFaceMeshResults);
+    try {
+      if (!localStream) {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+          audio: false
+        });
+      }
+      const youVideo = document.getElementById('youVideo');
+      youVideo.srcObject = localStream;
+      youVideo.style.display = 'block';
+      document.getElementById('youCamOff').style.display = 'none';
+    } catch(e) {
+      console.error(e);
+      showToast('Camera access denied!');
+      throw e;
+    }
  
-  // Start detection loop
-  const youVideo = document.getElementById('youVideo');
-  youVideo.addEventListener('loadedmetadata', () => {
+    if (!myFaceMesh) {
+      myFaceMesh = new FaceMesh({
+        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+      });
+      myFaceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+      myFaceMesh.onResults(onMyFaceMeshResults);
+    }
     startDetectionLoop();
-  });
  
-  // Setup WebRTC
-  initPeerConnection();
+    initPeerConnection();
  
-  if (isHost) {
-    // Host creates offer
-    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    wsSend({ type: 'offer', room: roomCode, sdp: pc.localDescription });
-  }
+    if (isHost) {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      wsSend({ type: 'offer', room: roomCode, sdp: pc.localDescription });
+    }
+  })();
+ 
+  return localStreamPromise;
 }
  
 // ============================================================
@@ -298,6 +317,7 @@ async function enterBattle() {
 // ============================================================
 async function startDetectionLoop() {
   const video = document.getElementById('youVideo');
+  if (myRafId) cancelAnimationFrame(myRafId);
   async function loop() {
     if (video.readyState >= 2 && !video.paused) {
       await myFaceMesh.send({ image: video });
@@ -312,13 +332,11 @@ function onMyFaceMeshResults(results) {
   const video = document.getElementById('youVideo');
   const w = video.videoWidth || canvas.offsetWidth;
   const h = video.videoHeight || canvas.offsetHeight;
-  canvas.width = w;
-  canvas.height = h;
+  if (canvas.width !== w) { canvas.width = w; canvas.height = h; }
  
   const lm = results.multiFaceLandmarks?.[0] || null;
   myLastLandmarks = lm;
  
-  // No face warning
   const warn = document.getElementById('youNoFace');
   if (!lm) {
     faceDetectedFrames = 0;
@@ -332,39 +350,40 @@ function onMyFaceMeshResults(results) {
 }
  
 // ============================================================
-//  WIREFRAME DRAW (dots + thin lines, triangulated)
+//  WIREFRAME DRAW (Simplified Aesthetic)
 // ============================================================
 const TESSELLATION = [
-  // MediaPipe face mesh connections — key edges
-  [10,338],[338,297],[297,332],[332,284],[284,251],[251,389],[389,356],[356,454],[454,323],[323,361],[361,288],[288,397],[397,365],[365,379],[379,378],[378,400],[400,377],[377,152],[152,148],[148,176],[176,149],[149,150],[150,136],[136,172],[172,58],[58,132],[132,93],[93,234],[234,127],[127,162],[162,21],[21,54],[54,103],[103,67],[67,109],[109,10],
-  // Eyes
-  [362,382],[382,381],[381,380],[380,374],[374,373],[373,390],[390,249],[249,263],[263,466],[466,388],[388,387],[387,386],[386,385],[385,384],[384,398],[398,362],
-  [33,7],[7,163],[163,144],[144,145],[145,153],[153,154],[154,155],[155,133],[133,173],[173,157],[157,158],[158,159],[159,160],[160,161],[161,246],[246,33],
-  // Eyebrows
-  [276,283],[283,282],[282,295],[295,285],[285,300],[300,293],[293,334],[334,296],[296,336],
-  [46,53],[53,52],[52,65],[65,55],[55,70],[70,63],[63,105],[105,66],[66,107],
+  // Jawline
+  [10, 338], [338, 297], [297, 332], [332, 284], [284, 251], [251, 389], [389, 356], [356, 454], [454, 323], [323, 361], [361, 288], [288, 397], [397, 365], [365, 379], [379, 378], [378, 400], [400, 377], [377, 152], [152, 148], [148, 176], [176, 149], [149, 150], [150, 136], [136, 172], [172, 58], [58, 132], [132, 93], [93, 234], [234, 127], [127, 162], [162, 21], [21, 54], [54, 103], [103, 67], [67, 109], [109, 10],
+  // Eyes (Left)
+  [33, 7], [7, 163], [163, 144], [144, 145], [145, 153], [153, 154], [154, 155], [155, 133], [133, 173], [173, 157], [157, 158], [158, 159], [159, 160], [160, 161], [161, 246], [246, 33],
+  // Eyes (Right)
+  [362, 382], [382, 381], [381, 380], [380, 374], [374, 373], [373, 390], [390, 249], [249, 263], [263, 466], [466, 388], [388, 387], [387, 386], [386, 385], [385, 384], [384, 398], [398, 362],
+  // Eyebrows (Left)
+  [46, 53], [53, 52], [52, 65], [65, 55], [55, 70], [70, 63], [63, 105], [105, 66], [66, 107],
+  // Eyebrows (Right)
+  [276, 283], [283, 282], [282, 295], [295, 285], [285, 300], [300, 293], [293, 334], [334, 296], [296, 336],
   // Nose
-  [168,6],[6,197],[197,195],[195,5],[5,4],[4,1],[1,19],[19,94],[94,2],[2,164],[164,0],[0,267],[267,269],[269,270],[270,409],[409,291],[291,306],[306,292],[292,308],[308,324],[324,318],[318,402],[402,317],[317,14],[14,87],[87,178],[178,88],[88,95],[95,78],[78,191],[191,80],[80,81],[81,82],[82,13],[13,312],[312,311],[311,310],[310,415],[415,308],
-  // Lips
-  [61,185],[185,40],[40,39],[39,37],[37,0],[0,267],[267,269],[269,270],[270,409],[409,291],[291,375],[375,321],[321,405],[405,314],[314,17],[17,84],[84,181],[181,91],[91,146],[146,61],
-  // Cheeks / structure
-  [234,93],[93,132],[132,58],[58,172],[172,136],[136,150],[150,149],[149,176],[176,148],[148,152],
-  [454,323],[323,361],[361,288],[288,397],[397,365],[365,379],[379,378],[378,400],[400,377],
-  // Forehead
-  [10,109],[109,67],[67,103],[103,54],[54,21],[21,162],[162,127],[127,234],
-  [10,338],[338,297],[297,332],[332,284],[284,251],[251,389],[389,356],[356,454],
+  [168, 6], [6, 1], [1, 2], [2, 164], [164, 0]
 ];
  
-const LANDMARK_POINTS = [1,2,4,5,6,7,8,9,10,13,14,17,19,21,33,37,39,40,46,52,53,54,55,58,61,63,65,66,67,70,78,80,81,82,84,87,88,91,93,94,95,103,105,107,109,127,132,133,136,144,145,146,148,149,150,151,152,153,154,155,157,158,159,160,161,162,163,164,168,172,173,176,178,181,185,191,195,197,234,246,249,251,263,267,269,270,276,282,283,284,285,291,292,293,295,296,297,300,306,308,310,311,312,314,317,318,321,323,324,332,334,336,338,356,361,362,365,373,374,375,377,378,379,380,381,382,384,385,386,387,388,389,390,397,398,400,402,405,409,415,454,466];
+// Important facial positions only
+const LANDMARK_POINTS = [
+  1, 4, // Nose
+  33, 133, 362, 263, // Eyes corners
+  70, 107, 300, 336, // Eyebrows outer
+  234, 454, // Cheekbones
+  152, 10, // Chin/Forehead
+  61, 291 // Mouth corners
+];
  
 function drawWireframe(canvas, landmarks, w, h, color) {
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, w, h);
   if (!landmarks) return;
  
-  // Thin connection lines
-  ctx.strokeStyle = color + '55'; // 33% opacity
-  ctx.lineWidth = 0.5;
+  ctx.strokeStyle = color + '44';
+  ctx.lineWidth = 1;
   ctx.lineCap = 'round';
  
   for (const [a, b] of TESSELLATION) {
@@ -375,30 +394,25 @@ function drawWireframe(canvas, landmarks, w, h, color) {
     ctx.stroke();
   }
  
-  // Dots on key points
-  ctx.fillStyle = color + 'cc'; // 80% opacity
+  // Points
   for (const idx of LANDMARK_POINTS) {
     if (!landmarks[idx]) continue;
-    ctx.beginPath();
-    ctx.arc(landmarks[idx].x * w, landmarks[idx].y * h, 1.2, 0, Math.PI * 2);
-    ctx.fill();
-  }
+    const x = landmarks[idx].x * w;
+    const y = landmarks[idx].y * h;
  
-  // Brighter dots on key landmarks (eyes, nose, mouth corners)
-  const BRIGHT = [1, 4, 33, 133, 362, 263, 61, 291, 152, 10, 234, 454];
-  ctx.fillStyle = color + 'ff';
-  for (const idx of BRIGHT) {
-    if (!landmarks[idx]) continue;
-    ctx.beginPath();
-    ctx.arc(landmarks[idx].x * w, landmarks[idx].y * h, 2.5, 0, Math.PI * 2);
-    ctx.fill();
-    // Glow
+    ctx.fillStyle = color;
     ctx.shadowColor = color;
-    ctx.shadowBlur = 6;
+    ctx.shadowBlur = 10;
     ctx.beginPath();
-    ctx.arc(landmarks[idx].x * w, landmarks[idx].y * h, 1.5, 0, Math.PI * 2);
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
+ 
+    // Small ring around point
+    ctx.strokeStyle = color + '88';
+    ctx.beginPath();
+    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.stroke();
   }
 }
  
@@ -410,15 +424,11 @@ function analyzeFace(lm) {
  
   const d = (a, b) => Math.sqrt((lm[a].x - lm[b].x) ** 2 + (lm[a].y - lm[b].y) ** 2);
   const mid = (a, b) => ({ x: (lm[a].x + lm[b].x) / 2, y: (lm[a].y + lm[b].y) / 2 });
-  const dmid = (p, q) => Math.sqrt((p.x - q.x) ** 2 + (p.y - q.y) ** 2);
  
-  const faceW = d(234, 454);   // cheekbone width
-  const faceH = d(10, 152);    // forehead to chin
+  const faceW = d(234, 454);   
+  const faceH = d(10, 152);    
   const noseTip = lm[1];
  
-  // ---- SYMMETRY ----
-  // Compare mirrored landmark distances from vertical center axis
-  const pairsForSym = [[33,263],[7,249],[133,362],[145,374],[153,380],[246,466],[58,288],[172,397],[61,291],[78,308],[152,152]];
   const noseMidX = noseTip.x;
   let symSum = 0, symCount = 0;
   [[33,263],[7,249],[133,362],[61,291],[58,288],[234,454],[172,397]].forEach(([L,R]) => {
@@ -431,82 +441,48 @@ function analyzeFace(lm) {
   const symmetryRaw = symSum / symCount;
   const symmetry = (symmetryRaw * 10) * 0.6 + Math.random() * 0.3 + 0.1;
  
-  // ---- JAWLINE ----
-  // Jaw angle sharpness + chin projection
-  const jawW = d(172, 397);    // jaw width
-  const chinH = d(152, mid(58,288).y < lm[152].y ? 58 : 288);
+  const jawW = d(172, 397);    
   const jawRatio = faceH / jawW;
-  // More rectangular/oval = better defined
   const jawRaw = Math.max(0, 1 - Math.abs(jawRatio - 1.35) * 1.5);
-  const chinProj = lm[152].y; // higher (more forward) = more defined
   const jawline = clamp(jawRaw * 10 * 0.7 + Math.random() * 0.8 + 0.2, 3, 10);
  
-  // ---- EYES ----
-  // Eye size ratio + openness + spacing
   const leftEyeH  = d(159, 145);
   const rightEyeH = d(386, 374);
   const eyeH = (leftEyeH + rightEyeH) / 2;
   const eyeSpacing = d(133, 362);
   const eyeRatio = eyeH / faceH;
   const spacingRatio = eyeSpacing / faceW;
-  // Ideal spacing: ~0.35-0.4 of face width; size: 0.03-0.05 of height
   const eyeScore = Math.max(0, 1 - Math.abs(eyeRatio - 0.04) * 30) * 0.5
                  + Math.max(0, 1 - Math.abs(spacingRatio - 0.38) * 8) * 0.5;
   const eyes = clamp(eyeScore * 10 * 0.7 + Math.random() * 0.8 + 0.2, 3, 10);
  
-  // ---- EYEBROWS ----
-  // Brow height above eye, arch, thickness estimate
   const lBrowY = (lm[276].y + lm[285].y + lm[296].y) / 3;
   const rBrowY = (lm[46].y  + lm[55].y  + lm[66].y)  / 3;
   const lEyeY  = (lm[386].y + lm[374].y) / 2;
   const rEyeY  = (lm[159].y + lm[145].y) / 2;
-  const browGapL = Math.abs(lBrowY - lEyeY) / faceH;
-  const browGapR = Math.abs(rBrowY - rEyeY) / faceH;
-  const browGap = (browGapL + browGapR) / 2;
-  // Ideal gap: 0.03-0.06
+  const browGap = ((Math.abs(lBrowY - lEyeY) + Math.abs(rBrowY - rEyeY)) / 2) / faceH;
   const browScore = Math.max(0, 1 - Math.abs(browGap - 0.045) * 30);
   const brows = clamp(browScore * 10 * 0.65 + Math.random() * 1 + 0.5, 3, 10);
  
-  // ---- FACE STRUCTURE (golden ratio) ----
-  // Thirds: forehead, nose length, lower face
   const foreheadH  = Math.abs(lm[10].y  - lm[168].y);
   const midZoneH   = Math.abs(lm[168].y - lm[2].y);
   const lowerH     = Math.abs(lm[2].y   - lm[152].y);
   const total = foreheadH + midZoneH + lowerH;
-  const thirds = [foreheadH/total, midZoneH/total, lowerH/total];
-  const idealThird = 1/3;
-  const thirdsScore = 1 - thirds.reduce((acc, t) => acc + Math.abs(t - idealThird), 0);
-  // Width-height: ideal facial ratio ~1:1.62 (golden)
-  const goldenRatio = faceH / faceW;
-  const goldenScore = Math.max(0, 1 - Math.abs(goldenRatio - 1.62) * 1.2);
+  const thirdsScore = 1 - [foreheadH/total, midZoneH/total, lowerH/total].reduce((acc, t) => acc + Math.abs(t - 1/3), 0);
+  const goldenScore = Math.max(0, 1 - Math.abs((faceH / faceW) - 1.62) * 1.2);
   const structure = clamp((thirdsScore * 0.5 + goldenScore * 0.5) * 10 * 0.65 + Math.random() * 0.9 + 0.3, 3, 10);
  
-  // ---- SKIN CLARITY (proxy: landmark consistency / detection confidence) ----
-  // Since we can't directly see skin, proxy via how stable/high-confidence detection is
-  // We use face bounding box proportionality as a proxy
-  const skinBase = 4.5 + Math.random() * 4;
-  const skin = clamp(skinBase, 3, 10);
+  const skin = clamp(4.5 + Math.random() * 4, 3, 10);
  
-  // ---- PROPORTION ----
-  // Nose width vs face width, lip width vs face width, etc.
   const noseW = d(129, 358);
   const lipW  = d(61, 291);
-  const noseWidthRatio = noseW / faceW;
-  const lipWidthRatio  = lipW  / faceW;
-  // Ideal nose: ~0.25; lips: ~0.35-0.4
-  const noseProportionScore = Math.max(0, 1 - Math.abs(noseWidthRatio - 0.25) * 8);
-  const lipProportionScore  = Math.max(0, 1 - Math.abs(lipWidthRatio  - 0.37) * 7);
-  const proportion = clamp((noseProportionScore * 0.5 + lipProportionScore * 0.5) * 10 * 0.65 + Math.random() * 0.9 + 0.3, 3, 10);
+  const proportion = clamp((Math.max(0, 1 - Math.abs(noseW / faceW - 0.25) * 8) * 0.5 + Math.max(0, 1 - Math.abs(lipW / faceW - 0.37) * 7) * 0.5) * 10 * 0.65 + Math.random() * 0.9 + 0.3, 3, 10);
  
   const metrics = { symmetry, jawline, eyes, brows, structure, skin, proportion };
- 
-  // Weighted overall — symmetry and structure matter most
   const weights = { symmetry: 0.22, jawline: 0.18, eyes: 0.18, brows: 0.12, structure: 0.16, skin: 0.08, proportion: 0.06 };
   let overall = 0;
   for (const k in weights) overall += metrics[k] * weights[k];
-  overall = Math.round(overall * 10) / 10;
- 
-  return { metrics, overall };
+  return { metrics, overall: Math.round(overall * 10) / 10 };
 }
  
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
@@ -545,39 +521,36 @@ async function initiateBattle() {
   document.getElementById('scanBtn').disabled = true;
   document.getElementById('centerHint').textContent = 'Scanning both faces...';
  
-  // Tell opponent to scan too
   sendAppMsg({ type: 'battle-start' });
   runScan('you');
- 
-  // Simulate opponent scan (or receive real result)
   setTimeout(() => runScan('opp'), 300);
 }
  
 function runScan(who) {
-  const overlayId = who === 'you' ? 'youScanOverlay' : 'oppScanOverlay';
-  const fillId    = who === 'you' ? 'youProgressFill' : 'oppProgressFill';
-  const overlay   = document.getElementById(overlayId);
-  const fill      = document.getElementById(fillId);
+  const overlay   = document.getElementById(who === 'you' ? 'youScanOverlay' : 'oppScanOverlay');
+  const fill      = document.getElementById(who === 'you' ? 'youProgressFill' : 'oppProgressFill');
  
   overlay.classList.add('active');
   fill.style.width = '0%';
   setTimeout(() => { fill.style.width = '100%'; }, 50);
  
   setTimeout(() => {
-    overlay.classList.remove('active');
     fill.style.width = '0%';
  
     if (who === 'you') {
+      overlay.classList.remove('active');
       myResult = analyzeFace(myLastLandmarks);
       if (!myResult) myResult = { overall: 5.0, metrics: { symmetry:5,jawline:5,eyes:5,brows:5,structure:5,skin:5,proportion:5 } };
       displayScore('you', myResult);
       sendAppMsg({ type: 'my-result', result: myResult });
     } else {
-      // If we haven't received opponent result yet, use a simulated one
-      if (!oppResult) {
-        oppResult = generateSimOpponentResult();
+      // For opponent, we only remove overlay and display if we have the result
+      if (oppResult) {
+        overlay.classList.remove('active');
+        displayScore('opp', oppResult);
+      } else {
+        overlay.querySelector('.scan-label').textContent = 'WAITING...';
       }
-      displayScore('opp', oppResult);
     }
  
     checkBothDone();
@@ -585,7 +558,6 @@ function runScan(who) {
 }
  
 function generateSimOpponentResult() {
-  // Simulate a real-looking result for the opponent (used only if no real data received)
   const base = () => clamp(3.5 + Math.random() * 6, 3, 9.8);
   const m = { symmetry:base(), jawline:base(), eyes:base(), brows:base(), structure:base(), skin:base(), proportion:base() };
   const weights = { symmetry:0.22, jawline:0.18, eyes:0.18, brows:0.12, structure:0.16, skin:0.08, proportion:0.06 };
@@ -600,7 +572,6 @@ function displayScore(who, result) {
   badge.classList.add('visible');
   countUp(scoreEl, result.overall, 800);
  
-  // Update metric chips
   const chipsContainer = document.getElementById(who === 'you' ? 'youChips' : 'oppChips');
   const chips = chipsContainer.querySelectorAll('.m-chip');
   const keys = ['symmetry','jawline','eyes','brows','structure','skin','proportion'];
@@ -628,7 +599,6 @@ function checkBothDone() {
     document.getElementById('rematchBtn').classList.add('visible');
     document.getElementById('centerHint').textContent = 'See full results below';
  
-    // Show full result screen after 1.5s
     setTimeout(() => showResultScreen(), 1800);
  
     battleInProgress = false;
@@ -640,7 +610,6 @@ function showResultScreen() {
   const youWin = myResult.overall > oppResult.overall;
   const tied   = myResult.overall === oppResult.overall;
  
-  // Sides
   const youSide = document.getElementById('resultYouSide');
   const oppSide = document.getElementById('resultOppSide');
  
@@ -661,7 +630,6 @@ function showResultScreen() {
     document.getElementById('resCrown').textContent = '😔';
   }
  
-  // Scores
   document.getElementById('resYouScore').textContent = myResult.overall.toFixed(1);
   document.getElementById('resOppScore').textContent = oppResult.overall.toFixed(1);
   document.getElementById('resYouRating').textContent = getRating(myResult.overall);
@@ -672,11 +640,9 @@ function showResultScreen() {
   const diff = Math.abs(myResult.overall - oppResult.overall).toFixed(1);
   document.getElementById('resDiff').textContent = '+' + diff;
  
-  // Verdicts
   document.getElementById('resYouVerdict').textContent = getVerdict(myResult.overall, youWin);
   document.getElementById('resOppVerdict').textContent = getVerdict(oppResult.overall, !youWin);
  
-  // Metrics bars
   renderResultMetrics('resYouMetrics', myResult.metrics, 'you');
   renderResultMetrics('resOppMetrics', oppResult.metrics, 'opp');
  
@@ -708,19 +674,28 @@ function renderResultMetrics(containerId, metrics, who) {
   }
 }
  
-// ============================================================
-//  INCOMING APP MESSAGES (from opponent)
-// ============================================================
 function handleAppMessage(msg) {
   if (!msg) return;
   switch(msg.type) {
     case 'battle-start':
-      // Opponent initiated — start our scan
       if (!battleInProgress) initiateBattle();
       break;
     case 'my-result':
       oppResult = msg.result;
+      if (battleInProgress) {
+        const overlay = document.getElementById('oppScanOverlay');
+        overlay.classList.remove('active');
+        displayScore('opp', oppResult);
+      }
       checkBothDone();
+      break;
+    case 'opponent-disconnected':
+      showToast('Opponent disconnected');
+      opponentConnected = false;
+      document.getElementById('connDot').className = 'conn-dot';
+      document.getElementById('connLabel').textContent = 'DISCONNECTED';
+      document.getElementById('scanBtn').disabled = true;
+      document.getElementById('centerHint').textContent = 'Opponent left the battle.';
       break;
     case 'rematch':
       showToast('Opponent wants a rematch!');
@@ -734,9 +709,6 @@ function handleAppMessage(msg) {
   }
 }
  
-// ============================================================
-//  REMATCH
-// ============================================================
 function requestRematch() {
   sendAppMsg({ type: 'rematch' });
   resetBattle();
@@ -755,20 +727,13 @@ function resetBattle() {
   document.getElementById('oppScoreBadge').classList.remove('visible');
   document.getElementById('youScoreNum').textContent = '—';
   document.getElementById('oppScoreNum').textContent = '—';
-  // Reset chips
   ['youChips','oppChips'].forEach(id => {
     document.getElementById(id).querySelectorAll('.m-chip').forEach(c => {
       c.classList.remove('lit');
-      const key = c.dataset.key;
-      const labels = {symmetry:'SYM',jawline:'JAW',eyes:'EYES',brows:'BROWS',structure:'STRUCT',skin:'SKIN',proportion:'PROP'};
-      c.textContent = labels[key] + ' —';
     });
   });
 }
  
-// ============================================================
-//  UTILS
-// ============================================================
 function countUp(el, target, duration) {
   const steps = 30;
   const step = duration / steps;

@@ -28,7 +28,7 @@
 
 <div id="screen-room" class="screen">
   <div class="room-panel" id="roomPanel">
-    <button class="btn-back" onclick="showScreen('lobby')">← BACK</button>
+    <button class="btn-back" onclick="leaveRoom()">← BACK</button>
     <div class="panel-header" id="roomPanelTitle">CREATE ROOM</div>
     <div class="panel-sub" id="roomPanelSub">Share the code with your opponent</div>
     <div class="divider"></div>
@@ -39,7 +39,7 @@
       </div>
       <div class="waiting-indicator"><div class="pulse-dot"></div><span id="waitingText">GENERATING ROOM...</span></div>
     </div>
-    <div id="joinMode" style="display:none; display:flex; flex-direction:column; gap:16px;">
+    <div id="joinMode" style="display:none; flex-direction:column; gap:16px;">
       <div class="field-group">
         <div class="field-label">ROOM CODE</div>
         <input class="field-input" id="joinCodeInput" maxlength="6" placeholder="ENTER CODE" autocomplete="off" oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter')joinRoom()">
@@ -65,9 +65,12 @@
         <div class="cam-off-placeholder" id="youCamOff"><div class="cam-off-icon">◎</div><div class="cam-off-text">Starting camera...</div></div>
         <video id="youVideo" class="fighter-video you-vid" autoplay muted playsinline></video>
         <canvas id="youCanvas" class="fighter-canvas you-canvas"></canvas>
-        <div class="fighter-label"><div class="fighter-name" id="youLabel">YOU</div></div>
+        <div class="fighter-label">
+          <div class="fighter-name" id="youLabel">YOU</div>
+          <button class="toggle-mesh-btn" onclick="toggleMesh()">MESH</button>
+        </div>
         <div class="cb tl"></div><div class="cb br"></div>
-        <div class="scan-overlay" id="youScanOverlay"><div class="scan-sweep"></div><div class="scan-label">ANALYZING</div><div class="scan-progress-bar"><div class="scan-progress-fill" id="youProgressFill"></div></div></div>
+        <div class="scan-overlay" id="youScanOverlay"><div class="scan-sweep"></div><div class="scan-label" id="scanStageLabel">ANALYZING</div><div class="scan-progress-bar"><div class="scan-progress-fill" id="youProgressFill"></div></div></div>
         <div class="live-score-badge" id="youScoreBadge"><div class="score-big" id="youScoreNum">—</div><div class="score-sub">YOUR SCORE</div></div>
         <div class="no-face-warn" id="youNoFace">NO FACE DETECTED</div>
       </div>
@@ -78,7 +81,8 @@
     <div class="center-col">
       <div class="winner-announce" id="winnerAnnounce">WAITING</div>
       <div class="vs-giant">VS</div>
-      <div class="center-timer" id="centerTimer"></div>
+      <div id="chatBox" class="chat-box"></div>
+      <input type="text" id="chatInput" class="chat-input" placeholder="Chat..." onkeydown="if(event.key==='Enter')sendChat()">
       <button class="center-btn" id="scanBtn" onclick="initiateBattle()" disabled>SCAN</button>
       <button class="rematch-btn" id="rematchBtn" onclick="requestRematch()">REMATCH</button>
       <div class="center-hint" id="centerHint">Waiting for opponent...</div>
@@ -107,7 +111,7 @@
     </div>
     <div class="result-center">
       <div class="crown-icon" id="resCrown">🏆</div><div class="result-winner-label" id="resWinnerLabel">—</div><div style="height:1px;width:100%;background:var(--border);"></div><div class="result-diff" id="resDiff">+0</div><div class="result-diff-label">POINT DIFF</div><div style="height:1px;width:100%;background:var(--border);"></div>
-      <div class="result-actions"><button class="center-btn" onclick="requestRematch()" style="width:100%">REMATCH</button><button class="btn-secondary" onclick="showScreen('lobby')" style="width:100%;font-size:0.8rem;padding:10px 0;">LEAVE</button></div>
+      <div class="result-actions"><button class="center-btn" onclick="requestRematch()" style="width:100%">REMATCH</button><button class="btn-secondary" onclick="leaveRoom()" style="width:100%;font-size:0.8rem;padding:10px 0;">LEAVE</button></div>
     </div>
     <div class="result-side" id="resultOppSide">
       <div class="result-player-tag">OPPONENT</div><div class="result-score-huge loser" id="resOppScore">—</div><div class="result-rating loser" id="resOppRating">—</div><div class="result-metrics" id="resOppMetrics"></div><div class="result-verdict" id="resOppVerdict"></div>
