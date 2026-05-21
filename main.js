@@ -95,6 +95,8 @@ function leaveRoom() {
   }
   dataChannel = null;
   localStreamPromise = null;
+  iceCandidateQueue = [];
+  remoteStream = null;
   opponentConnected = false;
   battleInProgress = false;
   myResult = null;
@@ -107,6 +109,11 @@ function leaveRoom() {
   const oppVideo = document.getElementById('oppVideo');
   youVideo.srcObject = null;
   oppVideo.srcObject = null;
+  
+  if (remoteStream) {
+    remoteStream.getTracks().forEach(t => t.stop());
+    remoteStream = null;
+  }
 
   showScreen('lobby');
 }
@@ -237,7 +244,11 @@ async function handleSignal(msg) {
     case 'ice':
       if (msg.candidate) {
         if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-          try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch (e) { }
+          try { 
+            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); 
+          } catch (e) { 
+            console.warn('Deferred ICE candidate error:', e);
+          }
         } else {
           iceCandidateQueue.push(msg.candidate);
         }
@@ -1121,4 +1132,14 @@ function showToast(msg) {
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+setTimeout(() => el.classList.remove('show'), 3000);
+}
+t.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+setTimeout(() => el.classList.remove('show'), 3000);
 }
