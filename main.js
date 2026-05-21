@@ -260,26 +260,30 @@ async function handleSignal(msg) {
 }
 
 // ============================================================
-//  WEBRTC STUN & TURN CONFIGURATION
+//  WEBRTC CONFIGURATION (PRIVATE STUN & TURN)
 // ============================================================
 const ICE_SERVERS = {
   iceServers: [
-    // Public STUN Servers
+    // Google STUN Servers (fastest for local and Wi-Fi networks)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
     
-    // Expanded TURN Server array containing standard, secure WebRTC ports (3478 / 5349)
+    // Your Metered.ca STUN Server
+    {
+      urls: "stun:stun.relay.metered.ca:80"
+    },
+    
+    // Your Private Metered.ca TURN Servers (bypasses mobile cellular blocks)
     {
       urls: [
-        'turn:openrelay.metered.ca:80',
-        'turn:openrelay.metered.ca:3478',
-        'turn:openrelay.metered.ca:443',
-        'turns:openrelay.metered.ca:443',
-        'turns:openrelay.metered.ca:5349'
+        "turn:global.relay.metered.ca:80",
+        "turn:global.relay.metered.ca:80?transport=tcp",
+        "turn:global.relay.metered.ca:443",
+        "turns:global.relay.metered.ca:443?transport=tcp"
       ],
-      username: 'openrelay',
-      credential: 'openrelay'
+      username: "14118a1f77c0f0c134fc4dc0",
+      credential: "odhhMBLm2ie+3j/R"
     }
   ]
 };
