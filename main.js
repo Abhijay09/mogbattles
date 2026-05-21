@@ -52,6 +52,7 @@ let scanState = {
 };
 
 let dataChannel = null;
+let iceCandidateQueue = []; // Added declaration
 
 // ============================================================
 //  SCREEN ROUTER
@@ -61,12 +62,11 @@ function showScreen(name) {
   document.getElementById('screen-' + name).classList.add('active');
 }
 
-// FIX: event reference was unreliable — pass btn explicitly via onclick
 function toggleMesh(btn) {
   const canvas = document.getElementById('youCanvas');
   const isHidden = canvas.style.display === 'none';
   canvas.style.display = isHidden ? 'block' : 'none';
-  btn.classList.toggle('active', isHidden);
+  if (btn) btn.classList.toggle('active', isHidden);
 }
 
 function toggleMic() {
@@ -95,25 +95,19 @@ function leaveRoom() {
   }
   dataChannel = null;
   localStreamPromise = null;
-  iceCandidateQueue = [];
-  remoteStream = null;
   opponentConnected = false;
   battleInProgress = false;
   myResult = null;
   oppResult = null;
   myLastLandmarks = null;
   faceDetectedFrames = 0;
+  iceCandidateQueue = []; // Added queue reset
 
   // Reset video elements
   const youVideo = document.getElementById('youVideo');
   const oppVideo = document.getElementById('oppVideo');
   youVideo.srcObject = null;
   oppVideo.srcObject = null;
-  
-  if (remoteStream) {
-    remoteStream.getTracks().forEach(t => t.stop());
-    remoteStream = null;
-  }
 
   showScreen('lobby');
 }
@@ -244,11 +238,7 @@ async function handleSignal(msg) {
     case 'ice':
       if (msg.candidate) {
         if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-          try { 
-            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); 
-          } catch (e) { 
-            console.warn('Deferred ICE candidate error:', e);
-          }
+          try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch (e) { }
         } else {
           iceCandidateQueue.push(msg.candidate);
         }
@@ -322,7 +312,6 @@ function initPeerConnection() {
   }
 }
 
-// FIX: Centralize data channel setup so both host and peer get the same handlers
 function setupDataChannel(ch) {
   ch.onopen = () => console.log('DataChannel open');
   ch.onclose = () => console.log('DataChannel closed');
@@ -438,7 +427,6 @@ function onMyFaceMeshResults(results) {
   const w = video.videoWidth || canvas.offsetWidth;
   const h = video.videoHeight || canvas.offsetHeight;
 
-  // FIX: Only resize canvas if dimensions actually changed to avoid flicker
   if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) {
     canvas.width = w;
     canvas.height = h;
@@ -467,11 +455,9 @@ function onMyFaceMeshResults(results) {
 //  SCAN PROGRESS (Multi-angle capture)
 // ============================================================
 function updateScanProgress(lm) {
-  // Yaw: nose tip relative to eye outer corners
   const eyeW = lm[263].x - lm[33].x;
   const yaw = eyeW > 0.01 ? (lm[1].x - lm[33].x) / eyeW : 0.5;
 
-  // Pitch: nose tip relative to forehead/chin
   const faceH = lm[152].y - lm[10].y;
   const pitch = faceH > 0.01 ? (lm[1].y - lm[10].y) / faceH : 0.5;
 
@@ -485,7 +471,6 @@ function updateScanProgress(lm) {
     if (Math.abs(yaw - 0.5) < 0.1 && Math.abs(pitch - 0.5) < 0.12) {
       scanState.stableFrames++;
       if (scanState.stableFrames > 25) {
-        // Capture frontal landmarks for analysis
         scanState.frontLandmarks = lm.map(p => ({ x: p.x, y: p.y, z: p.z }));
         scanState.stage = 1;
         scanState.progress = 33;
@@ -501,7 +486,6 @@ function updateScanProgress(lm) {
     else if (!scanState.leftSeen) instr.textContent = 'NOW TURN LEFT';
     else if (!scanState.rightSeen) instr.textContent = 'NOW TURN RIGHT';
 
-    // FIX: Yaw threshold — mirrored video, so "left" on screen is right in landmarks
     if (yaw < 0.33) {
       scanState.rightSeen = true;
       if (!scanState.rightLandmarks)
@@ -552,7 +536,6 @@ function finishMyScan() {
   overlay.classList.remove('active');
   fill.style.width = '0%';
 
-  // FIX: Use multi-angle data for a more robust analysis
   myResult = analyzeFaceMultiAngle(
     scanState.frontLandmarks || myLastLandmarks,
     scanState.leftLandmarks,
@@ -572,27 +555,20 @@ function finishMyScan() {
 //  WIREFRAME DRAW
 // ============================================================
 const TESSELLATION = [
-  // Jawline
   [10,338],[338,297],[297,332],[332,284],[284,251],[251,389],[389,356],[356,454],
   [454,323],[323,361],[361,288],[288,397],[397,365],[365,379],[379,378],[378,400],
   [400,377],[377,152],[152,148],[148,176],[176,149],[149,150],[150,136],[136,172],
   [172,58],[58,132],[132,93],[93,234],[234,127],[127,162],[162,21],[21,54],[54,103],
   [103,67],[67,109],[109,10],
-  // Eyes L
   [33,7],[7,163],[163,144],[144,145],[145,153],[153,154],[154,155],[155,133],
   [133,173],[173,157],[157,158],[158,159],[159,160],[160,161],[161,246],[246,33],
-  // Eyes R
   [362,382],[382,381],[381,380],[380,374],[374,373],[373,390],[390,249],[249,263],
   [263,466],[466,388],[388,387],[387,386],[386,385],[385,384],[384,398],[398,362],
-  // Eyebrows L
   [46,53],[53,52],[52,65],[65,55],[55,70],[70,63],[63,105],[105,66],[66,107],[107,55],
-  // Eyebrows R
   [276,283],[283,282],[282,295],[295,285],[285,300],[300,293],[293,334],[334,296],[296,336],[336,285],
-  // Lips
   [61,146],[146,91],[91,181],[181,84],[84,17],[17,314],[314,405],[405,321],[321,375],
   [375,291],[291,308],[308,324],[324,318],[318,402],[402,317],[317,14],[14,87],[87,178],
   [178,95],[95,78],[78,61],
-  // Nose
   [168,6],[6,1],[1,2],[2,164],[164,0],[0,168],[168,197],[197,195],[195,5],
 ];
 
@@ -610,7 +586,6 @@ function drawWireframe(canvas, landmarks, w, h, color) {
 
   for (const [a, b] of TESSELLATION) {
     if (!landmarks[a] || !landmarks[b]) continue;
-    // Mirror to match the flipped video
     const ax = (1 - landmarks[a].x) * w;
     const ay = landmarks[a].y * h;
     const bx = (1 - landmarks[b].x) * w;
@@ -643,15 +618,7 @@ function drawWireframe(canvas, landmarks, w, h, color) {
 // ============================================================
 //  SCORING ENGINE — Fixed & Multi-Angle
 // ============================================================
-
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-
-// FIX: The old scoring had severe issues:
-// 1. symmetryRaw was in 0–1 range but multiplied as if it was already ~1
-// 2. skin was pure random (no landmark analysis)  
-// 3. "MOG MAGNIFICATION" formula caused nearly everyone to cluster around 5–6
-// 4. No actual multi-angle use despite capturing angles
-// New approach: deterministic landmark geometry + small ±variance noise
 
 function analyzeFaceMultiAngle(lmFront, lmLeft, lmRight) {
   if (!lmFront || lmFront.length < 468) return null;
@@ -671,8 +638,7 @@ function analyzeFace(lm, lmLeft, lmRight) {
   const faceH = d(10, 152);
   if (faceW < 0.01 || faceH < 0.01) return null;
 
-  // ── SYMMETRY ──────────────────────────────────────────────
-  // Compare distances of paired landmarks from nose midline
+  // Symmetry
   const noseMidX = lm[1].x;
   const pairs = [[33,263],[7,249],[133,362],[61,291],[58,288],[234,454],[172,397],[70,300],[105,334]];
   let symSum = 0;
@@ -682,19 +648,16 @@ function analyzeFace(lm, lmLeft, lmRight) {
     const maxD = Math.max(dL, dR, 0.0001);
     symSum += 1 - Math.abs(dL - dR) / maxD;
   }
-  const symmetryRaw = symSum / pairs.length; // 0–1, higher=more symmetric
-  // Map 0.85–1.0 → 6–10, <0.7 → 3–5 with noise ±0.3
+  const symmetryRaw = symSum / pairs.length;
   const symmetry = clamp(
     (symmetryRaw - 0.7) / 0.3 * 6 + 4 + (Math.random() - 0.5) * 0.6,
     2, 10
   );
 
-  // ── JAWLINE ───────────────────────────────────────────────
-  // Face height/width ratio + jaw width relative to cheekbones
+  // Jawline
   const jawW = d(172, 397);
   const cheekW = d(234, 454);
-  // Ideal: jaw is ~75–80% of cheekbones (inverted triangle), face ratio ~1.3–1.5
-  const jawTaper = jawW / Math.max(cheekW, 0.001); // Lower = more tapered
+  const jawTaper = jawW / Math.max(cheekW, 0.001);
   const faceRatio = faceH / faceW;
   const taperScore = Math.max(0, 1 - Math.abs(jawTaper - 0.76) * 4);
   const ratioScore = Math.max(0, 1 - Math.abs(faceRatio - 1.38) * 2);
@@ -703,17 +666,16 @@ function analyzeFace(lm, lmLeft, lmRight) {
     2, 10
   );
 
-  // ── EYES ──────────────────────────────────────────────────
-  // Eye openness + spacing ratio (ideal eye spacing ~eye-width apart)
+  // Eyes
   const leftEyeW  = d(33, 133);
   const rightEyeW = d(362, 263);
   const leftEyeH  = d(159, 145);
   const rightEyeH = d(386, 374);
   const avgEyeW   = (leftEyeW + rightEyeW) / 2;
   const avgEyeH   = (leftEyeH + rightEyeH) / 2;
-  const eyeAspect = avgEyeH / Math.max(avgEyeW, 0.001); // ~0.28–0.32 ideal
-  const eyeSpacing = d(133, 362); // Inner corners
-  const spacingRatio = eyeSpacing / Math.max(faceW, 0.001); // ~0.32–0.40 ideal
+  const eyeAspect = avgEyeH / Math.max(avgEyeW, 0.001);
+  const eyeSpacing = d(133, 362);
+  const spacingRatio = eyeSpacing / Math.max(faceW, 0.001);
   const eyeAspectScore = Math.max(0, 1 - Math.abs(eyeAspect - 0.30) * 10);
   const eyeSpacingScore = Math.max(0, 1 - Math.abs(spacingRatio - 0.36) * 6);
   const eyes = clamp(
@@ -721,17 +683,15 @@ function analyzeFace(lm, lmLeft, lmRight) {
     2, 10
   );
 
-  // ── BROWS ─────────────────────────────────────────────────
-  // Brow height above eyes + brow arch
+  // Brows
   const lBrowY  = (lm[276].y + lm[285].y + lm[296].y) / 3;
   const rBrowY  = (lm[46].y  + lm[55].y  + lm[66].y)  / 3;
   const lEyeTopY = Math.min(lm[386].y, lm[374].y);
   const rEyeTopY = Math.min(lm[159].y, lm[145].y);
   const browLift = ((lEyeTopY - lBrowY) + (rEyeTopY - rBrowY)) / 2;
-  const browLiftNorm = browLift / faceH; // ~0.03–0.07 ideal
+  const browLiftNorm = browLift / faceH;
   const browScore = Math.max(0, 1 - Math.abs(browLiftNorm - 0.05) * 20);
 
-  // Brow width vs eye width
   const lBrowW = d(46, 107);
   const rBrowW = d(276, 336);
   const avgBrowW = (lBrowW + rBrowW) / 2;
@@ -742,7 +702,7 @@ function analyzeFace(lm, lmLeft, lmRight) {
     2, 10
   );
 
-  // ── STRUCTURE (golden ratio + rule of thirds) ─────────────
+  // Structure
   const foreheadH = Math.abs(lm[10].y  - lm[168].y);
   const midZoneH  = Math.abs(lm[168].y - lm[2].y);
   const lowerH    = Math.abs(lm[2].y   - lm[152].y);
@@ -755,28 +715,23 @@ function analyzeFace(lm, lmLeft, lmRight) {
     2, 10
   );
 
-  // ── SKIN (proxy: edge smoothness of face outline) ─────────
-  // We can't measure actual skin texture from landmarks.
-  // Instead we measure face outline smoothness as a proxy.
-  // Use z-depth variance from MediaPipe as additional signal.
+  // Skin
   let zVariance = 0;
   const skinPoints = [10, 152, 234, 454, 33, 263, 1, 61, 291];
   const zVals = skinPoints.map(i => lm[i]?.z || 0);
   const zMean = zVals.reduce((a, b) => a + b, 0) / zVals.length;
   zVariance = zVals.reduce((a, b) => a + (b - zMean) ** 2, 0) / zVals.length;
-  // Lower z-variance = flatter face = possibly better for front-facing assessment
   const skinProxy = Math.max(0, 1 - zVariance * 500);
   const skin = clamp(
     skinProxy * 4 + 4 + (Math.random() - 0.5) * 2.5,
     2, 10
   );
 
-  // ── PROPORTION (nose/lips relative to face) ───────────────
+  // Proportion
   const noseW = d(129, 358);
   const lipW  = d(61, 291);
   const noseScore = Math.max(0, 1 - Math.abs(noseW / faceW - 0.23) * 7);
   const lipScore  = Math.max(0, 1 - Math.abs(lipW  / faceW - 0.38) * 6);
-  // Nose-to-lip height ratio
   const noseLipH = Math.abs(lm[2].y - lm[14].y) / faceH;
   const nlScore  = Math.max(0, 1 - Math.abs(noseLipH - 0.12) * 10);
   const proportion = clamp(
@@ -784,14 +739,11 @@ function analyzeFace(lm, lmLeft, lmRight) {
     2, 10
   );
 
-  // ── MULTI-ANGLE BONUS ─────────────────────────────────────
-  // If we have side profile data, check jaw definition from side
   let multiAngleBonus = 0;
   if (lmLeft || lmRight) {
-    multiAngleBonus = 0.3; // Reward completing all angles
+    multiAngleBonus = 0.3;
   }
 
-  // ── WEIGHTED OVERALL ─────────────────────────────────────
   const metrics = { symmetry, jawline, eyes, brows, structure, skin, proportion };
   const weights  = { symmetry: 0.22, jawline: 0.18, eyes: 0.18, brows: 0.10, structure: 0.16, skin: 0.08, proportion: 0.08 };
 
@@ -799,9 +751,6 @@ function analyzeFace(lm, lmLeft, lmRight) {
   for (const k in weights) rawOverall += metrics[k] * weights[k];
   rawOverall += multiAngleBonus;
 
-  // FIX: Use a modest spread curve instead of the aggressive magnification
-  // that was clustering scores. Map linearly with slight stretch.
-  // Raw scores naturally range ~3–8, we stretch to ~2–10.
   const finalOverall = clamp(
     Math.round((rawOverall * 1.15 - 0.5) * 10) / 10,
     1.0, 10.0
@@ -860,7 +809,6 @@ async function initiateBattle() {
 
   sendAppMsg({ type: 'battle-start' });
   runScan('you');
-  // FIX: Start opp scan immediately — don't wait 300ms (no reason to)
   runScan('opp');
 }
 
@@ -871,29 +819,22 @@ async function runScan(who) {
   overlay.classList.add('active');
 
   if (who === 'opp') {
-    // Animate opponent progress bar — will be hidden when real result arrives
     fill.style.transition = 'width 5s linear';
     fill.style.width = '0%';
     requestAnimationFrame(() => { fill.style.width = '100%'; });
 
-    // FIX: Don't call checkBothDone from the opp timer — it fires even if
-    // oppResult is still null and my scan hasn't finished. checkBothDone
-    // guards itself already, so it's fine to call it from the timer,
-    // but we need to also handle the case where the result arrives AFTER the timer.
     setTimeout(() => {
       if (oppResult) {
         overlay.classList.remove('active');
         fill.style.transition = '';
         fill.style.width = '0%';
       } else {
-        // Keep showing "WAITING..." until result arrives
         overlay.querySelector('.scan-label').textContent = 'WAITING...';
       }
     }, 5200);
     return;
   }
 
-  // Reset interactive scan for 'YOU'
   Object.assign(scanState, {
     active: true,
     stage: 0,
@@ -935,7 +876,6 @@ function displayScore(who, result) {
 function checkBothDone() {
   if (!myResult || !oppResult) return;
 
-  // FIX: Hide opp scan overlay now that we have the result
   const oppOverlay = document.getElementById('oppScanOverlay');
   oppOverlay.classList.remove('active');
   displayScore('opp', oppResult);
@@ -1038,8 +978,6 @@ function handleAppMessage(msg) {
 
     case 'my-result':
       oppResult = msg.result;
-      // FIX: If oppScanOverlay is still showing the fake progress bar, clear it
-      // checkBothDone now handles hiding the overlay
       checkBothDone();
       break;
 
@@ -1050,7 +988,6 @@ function handleAppMessage(msg) {
       document.getElementById('connLabel').textContent = 'DISCONNECTED';
       document.getElementById('scanBtn').disabled = true;
       document.getElementById('centerHint').textContent = 'Opponent left the battle.';
-      // Stop any in-progress scan
       if (battleInProgress) {
         battleInProgress = false;
         scanState.active = false;
@@ -1096,7 +1033,6 @@ function resetBattle() {
   document.getElementById('youScanOverlay').classList.remove('active');
   document.getElementById('oppScanOverlay').classList.remove('active');
 
-  // FIX: Reset chip text too, not just the .lit class
   ['youChips', 'oppChips'].forEach(id => {
     const keys   = ['symmetry', 'jawline', 'eyes', 'brows', 'structure', 'skin', 'proportion'];
     const labels = ['SYM', 'JAW', 'EYES', 'BROWS', 'STRUCT', 'SKIN', 'PROP'];
@@ -1111,11 +1047,10 @@ function countUp(el, target, duration) {
   const steps = 40;
   const stepMs = duration / steps;
   let i = 0;
-  // FIX: Clear any existing interval on the element
   if (el._countUpInterval) clearInterval(el._countUpInterval);
   el._countUpInterval = setInterval(() => {
     i++;
-    const eased = target * (1 - Math.pow(1 - i / steps, 3)); // ease-out cubic
+    const eased = target * (1 - Math.pow(1 - i / steps, 3));
     el.textContent = eased.toFixed(1);
     if (i >= steps) {
       el.textContent = target.toFixed(1);
@@ -1132,14 +1067,4 @@ function showToast(msg) {
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
-}
-setTimeout(() => el.classList.remove('show'), 3000);
-}
-t.getElementById('toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
-}
-setTimeout(() => el.classList.remove('show'), 3000);
 }
